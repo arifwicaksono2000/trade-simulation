@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Forex Simulation Chart</title>
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: #131722;
+        color: #d1d4dc;
+        font-family: -apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto,
+          Ubuntu, sans-serif;
+        overflow: hidden;
+      }
+      #chart {
+        width: 100vw;
+        height: 100vh;
+      }
+      .loading {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-size: 24px;
+        color: #ffffff;
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="loading" class="loading">Loading data...</div>
+    <div id="chart"></div>
+
+    <script>
+      const chartElement = document.getElementById("chart");
+      const loadingElement = document.getElementById("loading");
+
+      // Show loading
+      loadingElement.style.display = "block";
+
+      // Create Chart
+      const chartOptions = {
+        layout: {
+          textColor: "#d1d4dc",
+          background: { type: "solid", color: "#131722" },
+        },
+        grid: {
+          vertLines: { color: "#363c4e" },
+          horzLines: { color: "#363c4e" },
+        },
+        crosshair: {
+          mode: LightweightCharts.CrosshairMode.Normal,
+        },
+        timeScale: {
+          timeVisible: true,
+          secondsVisible: false,
+          borderColor: "#485c7b",
+        },
+        rightPriceScale: {
+          borderColor: "#485c7b",
+        },
+      };
+      const chart = LightweightCharts.createChart(chartElement, chartOptions);
+
+      const candlestickSeries = chart.addCandlestickSeries({
+        upColor: "#26a69a",
+        downColor: "#ef5350",
+        borderVisible: false,
+        wickUpColor: "#26a69a",
+        wickDownColor: "#ef5350",
+      });
+
+      // Resize handler
+      window.addEventListener("resize", () => {
+        chart.applyOptions({
+          width: window.innerWidth,
+          height: window.innerHeight,
+        });
+      });
+
+      // Fetch Data
+      fetch("/api/data")
+        .then((response) => response.json())
+        .then((data) => {
+          candlestickSeries.setData(data);
+          loadingElement.style.display = "none";
+
+          // Fit content roughly
+          chart.timeScale().fitContent();
+        })
+        .catch((err) => {
+          console.error(err);
+          loadingElement.innerText = "Error loading data.";
+        });
+    </script>
+  </body>
+</html>
