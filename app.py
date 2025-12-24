@@ -11,8 +11,10 @@ app = FastAPI()
 # Setup templates
 templates = Jinja2Templates(directory="templates")
 
-# Path to CSV
-CSV_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'staging', 'datecorrected-raw-price.csv')
+# Path to CSV - Adjusted for root directory structure
+# app.py is in trade-simulation/
+# csv is in trade-simulation/staging/
+CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'staging', 'datecorrected-raw-price.csv')
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
@@ -21,15 +23,13 @@ async def read_root(request: Request):
 @app.get("/api/data")
 async def get_data():
     if not os.path.exists(CSV_PATH):
-        return {"error": "CSV file not found"}
+        return {"error": "CSV file not found", "path": CSV_PATH}
     
     # Read CSV
     df = pd.read_csv(CSV_PATH)
     
-    # Parse Date
-    df['Date'] = pd.to_datetime(df['Date'])
-    
     # Optimized conversion for speed
+    df['Date'] = pd.to_datetime(df['Date'])
     df['time'] = df['Date'].astype('int64') // 10**9 
     
     # Rename and select columns
