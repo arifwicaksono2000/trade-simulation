@@ -1,46 +1,39 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Depends, Request
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-import pandas as pd
-import json
+from sqlalchemy.orm import Session
 import os
+from database import get_db
+from models import ForexData
 
 app = FastAPI()
 
 # Setup templates
 templates = Jinja2Templates(directory="templates")
 
-# Path to CSV - Adjusted for root directory structure
-# app.py is in trade-simulation/
-# csv is in trade-simulation/staging/
-CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'staging', 'datecorrected-raw-price.csv')
-
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 @app.get("/api/data")
-async def get_data():
-    if not os.path.exists(CSV_PATH):
-        return {"error": "CSV file not found", "path": CSV_PATH}
+async def get_data(db: Session = Depends(get_db)):
+    # Query database
+    # Assuming we want all data for now, ordered by timestamp
+    # Optimization: Select only necessary columns
+    results = db.query(ForexData).order_by(ForexData.timestamp).all()
     
-    # Read CSV
-    df = pd.read_csv(CSV_PATH)
-    
-    # Optimized conversion for speed
-    df['Date'] = pd.to_datetime(df['Date'])
-    df['time'] = df['Date'].astype('int64') // 10**9 
-    
-    # Rename and select columns
-    data = df[['time', 'BidOpen', 'BidHigh', 'BidLow', 'BidClose']].rename(columns={
-        'BidOpen': 'open',
-        'BidHigh': 'high',
-        'BidLow': 'low',
-        'BidClose': 'close'
-    })
-    
-    chart_data = data.to_dict('records')
+    # Format for chart
+    chart_data = [
+        {
+            "time": row.timestamp,
+            "open": row.bid_open,
+            "high": row.bid_high,
+            "low": row.bid_low,
+            "close": row.bid_close
+        }
+        for row in results
+    ]
         
     return chart_data
 
