@@ -26,9 +26,58 @@
             color: #ffffff;
             display: none;
         }
+        
+        /* Measure Tool Styles */
+        .measure-btn {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 100;
+            padding: 8px 16px;
+            background-color: #2962ff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            opacity: 0.8;
+            transition: opacity 0.2s;
+        }
+        .measure-btn:hover {
+            opacity: 1;
+        }
+        .measure-btn.active {
+            background-color: #0039cb;
+            box-shadow: 0 0 0 2px rgba(41, 98, 255, 0.5);
+        }
+
+        .measure-box {
+            position: absolute;
+            background-color: rgba(41, 98, 255, 0.2);
+            border: 1px solid #2962ff;
+            display: none;
+            pointer-events: none; /* Let clicks pass through if needed, but we intercept on container */
+            z-index: 50;
+        }
+
+        .measure-label {
+            position: absolute;
+            background-color: #2962ff;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            pointer-events: none;
+            display: none;
+            z-index: 51;
+            white-space: nowrap;
+        }
     </style>
 </head>
 <body>
+    <button id="measureBtn" class="measure-btn">Measure</button>
+    <div id="measureBox" class="measure-box"></div>
+    <div id="measureLabel" class="measure-label"></div>
     <div id="loading" class="loading">Loading data...</div>
     <div id="chart"></div>
 
@@ -90,6 +139,167 @@
                 console.error(err);
                 loadingElement.innerText = "Error loading data.";
             });
+
+        // --- Measure Tool Logic ---
+        const measureBtn = document.getElementById('measureBtn');
+        const measureBox = document.getElementById('measureBox');
+        const measureLabel = document.getElementById('measureLabel');
+
+        let isMeasureMode = false;
+        let isDrawing = false;
+        let startPoint = null; // { time, price }
+        let endPoint = null;   // { time, price }
+
+        measureBtn.addEventListener('click', toggleMeasureMode);
+
+        function toggleMeasureMode() {
+            // If we are cancelling mode, clear everything unless we have a persistent measurement
+            // But requirement says "stays until we click randomly".
+            // So toggling button just enters/exits the "ready to measure" state.
+            isMeasureMode = !isMeasureMode;
+            measureBtn.classList.toggle('active', isMeasureMode);
+            
+            if (isMeasureMode) {
+                chartElement.style.cursor = 'crosshair';
+                // Disable chart scrolling while measuring is active? 
+                // Usually TradingView allows scroll unless you are dragging.
+                // We'll handle drag suppression in mousedown.
+            } else {
+                chartElement.style.cursor = 'default';
+                // Clear measurement when explicitly turning off? 
+                // Or maybe just exit mode. Let's just exit mode.
+            }
+        }
+
+        // Mouse Events
+        chartElement.addEventListener('mousedown', (e) => {
+            if (!isMeasureMode && !measureBox.style.display === 'block') {
+                // If not in mode and no box showing, do nothing special
+                return;
+            }
+
+            // Click outside logic: if we have a box and click, dismiss it.
+            if (!isMeasureMode && measureBox.style.display !== 'none') {
+                clearMeasurement();
+                return;
+            }
+
+            if (isMeasureMode) {
+                isDrawing = true;
+                chart.applyOptions({ handleScroll: false, handleScale: false });
+                
+                const coordinate = chart.timeScale().coordinateToTime(e.offsetX);
+                const price = candlestickSeries.coordinateToPrice(e.offsetY);
+                
+                // We need the logical index or time object depending on data.
+                // coordinateToTime returns a time stamp or object.
+                // coordinateToPrice returns price.
+                
+                startPoint = { time: coordinate, price: price };
+                endPoint = { time: coordinate, price: price }; // Init end point
+                
+                updateMeasureBoxDisplay();
+            }
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (isDrawing && startPoint) {
+                // We need coordinates relative to chartElement
+                const rect = chartElement.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+
+                const time = chart.timeScale().coordinateToTime(x);
+                const price = candlestickSeries.coordinateToPrice(y);
+                
+                if (time !== null && price !== null) {
+                    endPoint = { time: time, price: price };
+                    updateMeasureBoxDisplay();
+                }
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (isDrawing) {
+                isDrawing = false;
+                isMeasureMode = false; // Exit mode after drawing one measurement
+                measureBtn.classList.remove('active');
+                chartElement.style.cursor = 'default';
+                chart.applyOptions({ handleScroll: true, handleScale: true });
+            }
+        });
+
+        function clearMeasurement() {
+            measureBox.style.display = 'none';
+            measureLabel.style.display = 'none';
+            startPoint = null;
+            endPoint = null;
+        }
+
+        function updateMeasureBoxDisplay() {
+            if (!startPoint || !endPoint) return;
+
+            // Convert logical to coordinates
+            const timeScale = chart.timeScale();
+            
+            // Note: timeToCoordinate might return null if out of range, 
+            // but we want to draw it anyway if possible.
+            // If time is object (business days), it must match exactly or close.
+            // Lightweight charts handle this usually.
+            
+            const x1 = timeScale.timeToCoordinate(startPoint.time);
+            const y1 = candlestickSeries.priceToCoordinate(startPoint.price);
+            
+            const x2 = timeScale.timeToCoordinate(endPoint.time);
+            const y2 = candlestickSeries.priceToCoordinate(endPoint.price);
+
+            if (x1 === null || y1 === null || x2 === null || y2 === null) return;
+
+            const left = Math.min(x1, x2);
+            const top = Math.min(y1, y2);
+            const width = Math.abs(x2 - x1);
+            const height = Math.abs(y2 - y1);
+
+            measureBox.style.left = left + 'px';
+            measureBox.style.top = top + 'px';
+            measureBox.style.width = width + 'px';
+            measureBox.style.height = height + 'px';
+            measureBox.style.display = 'block';
+
+            // Calculate differences
+            const priceDiff = endPoint.price - startPoint.price;
+            const pricePct = (priceDiff / startPoint.price) * 100;
+            
+            // Time diff is tricky with business days / raw timestamps.
+            // Assuming we deal with unix timestamps mostly or string dates. 
+            // For simple difference, we might need the index or just display raw.
+            // Let's try to get simple timestamp diff if numbers.
+            let timeText = '';
+            if (typeof startPoint.time === 'number' && typeof endPoint.time === 'number') {
+                // Assuming UX timestamp seconds
+                const diffSeconds = endPoint.time - startPoint.time;
+                const bars = 0; // Hard to calc bars without access to all data indices easily
+                timeText = `${Math.abs(diffSeconds / 60).toFixed(0)}m`; 
+            } else {
+                 // If it's date string, just show nothing or raw.
+                 timeText = ''; 
+            }
+
+            measureLabel.innerHTML = `
+                ${priceDiff.toFixed(5)} (${pricePct.toFixed(2)}%)<br>
+                ${timeText}
+            `;
+            measureLabel.style.left = (left + width / 2) + 'px';
+            measureLabel.style.top = (top - 30) + 'px';
+            measureLabel.style.display = 'block';
+        }
+
+        // Subscribe to changes to keep box position updated during scroll/zoom
+        chart.timeScale().subscribeVisibleTimeRangeChange(() => {
+            if (startPoint && endPoint) {
+                updateMeasureBoxDisplay();
+            }
+        });
 
     </script>
 </body>
