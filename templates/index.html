@@ -26,6 +26,34 @@
             color: #ffffff;
             display: none;
         }
+
+        /* Trade Tooltip */
+        .trade-tooltip {
+            position: absolute;
+            background-color: rgba(19, 23, 34, 0.95);
+            border: 1px solid #485c7b;
+            padding: 8px;
+            border-radius: 4px;
+            display: none;
+            z-index: 200;
+            pointer-events: none;
+            font-size: 12px;
+            line-height: 1.5;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        .trade-highlight {
+            position: absolute;
+            border-radius: 50%;
+            display: none;
+            z-index: 199;
+            pointer-events: none;
+            /* enlarged size handled in JS or class */
+            width: 12px;
+            height: 12px;
+            margin-left: -6px;
+            margin-top: -6px;
+            border: 2px solid white;
+        }
         
         /* Measure Tool Styles */
         .measure-btn {
@@ -78,6 +106,8 @@
     <button id="measureBtn" class="measure-btn">Measure</button>
     <div id="measureBox" class="measure-box"></div>
     <div id="measureLabel" class="measure-label"></div>
+    <div id="tradeTooltip" class="trade-tooltip"></div>
+    <div id="tradeHighlight" class="trade-highlight"></div>
     <div id="loading" class="loading">Loading data...</div>
     <div id="chart"></div>
 
@@ -120,25 +150,85 @@
             wickDownColor: '#ef5350', 
         });
 
+        // Trade Series (Longs and Shorts)
+        const longSeries = chart.addSeries(LightweightCharts.LineSeries, {
+            color: '#26a69a',
+            lineWidth: 0,
+            pointMarkersVisible: true,
+            pointMarkersRadius: 4, 
+            pointMarkersCanvasArc: true,
+            lineVisible: false,
+            crosshairMarkerVisible: false,
+        });
+
+        const shortSeries = chart.addSeries(LightweightCharts.LineSeries, {
+            color: '#ef5350',
+            lineWidth: 0,
+            pointMarkersVisible: true,
+            pointMarkersRadius: 4,
+            pointMarkersCanvasArc: true,
+            lineVisible: false,
+            crosshairMarkerVisible: false,
+        });
+
         // Resize handler
         window.addEventListener('resize', () => {
             chart.applyOptions({ width: window.innerWidth, height: window.innerHeight });
         });
 
+        let allTrades = [];
+
         // Fetch Data
-        fetch('/api/data')
-            .then(response => response.json())
-            .then(data => {
-                candlestickSeries.setData(data);
-                loadingElement.style.display = 'none';
+        Promise.all([
+             fetch('/api/data').then(r => r.json()),
+             fetch('/api/trades').then(r => r.json())
+        ]).then(([candleData, tradeData]) => {
+                candlestickSeries.setData(candleData);
                 
-                // Fit content roughly
+                // Process trades
+                allTrades = tradeData;
+                const longs = [];
+                const shorts = [];
+                
+                // Sort trades by time just in case, though usually DB handles it.
+                // Lightweight charts strict about order.
+                allTrades.sort((a, b) => a.time - b.time);
+
+                allTrades.forEach(t => {
+                   // Ensure unique time? 
+                   // If same timestamp, we drop it? Or add epsilon.
+                   // Simple fix: if multiple items have same time, shift slightly if possible logic wise, 
+                   // but here just pushing. Lightweight Charts might error if exact duplicates on same series.
+                   // We'll see.
+                   
+                   const point = { time: t.time, value: t.entry_price };
+                   if (t.position_type.toLowerCase() === 'long') {
+                       longs.push(point);
+                   } else {
+                       shorts.push(point);
+                   }
+                });
+
+                // Deduping for series (simple approach: last wins)
+                // Helper to dedup by time
+                const dedup = (arr) => {
+                    const seen = new Set();
+                    return arr.filter(item => {
+                        const k = item.time;
+                        return seen.has(k) ? false : seen.add(k);
+                    });
+                };
+
+                longSeries.setData(dedup(longs));
+                shortSeries.setData(dedup(shorts));
+
+                loadingElement.style.display = 'none';
                 chart.timeScale().fitContent();
-            })
-            .catch(err => {
-                console.error(err);
-                loadingElement.innerText = "Error loading data.";
-            });
+        })
+        .catch(err => {
+            console.error(err);
+            loadingElement.innerText = "Error loading data.";
+        });
 
         // --- Measure Tool Logic ---
         const measureBtn = document.getElementById('measureBtn');
@@ -298,6 +388,66 @@
         chart.timeScale().subscribeVisibleTimeRangeChange(() => {
             if (startPoint && endPoint) {
                 updateMeasureBoxDisplay();
+            }
+        });
+
+        // Trade Tooltip Logic
+        const tradeTooltip = document.getElementById('tradeTooltip');
+        const tradeHighlight = document.getElementById('tradeHighlight');
+
+        chartElement.addEventListener('mousemove', (e) => {
+            if (isMeasureMode) return;
+            if (e.buttons > 0) return; // Skip if dragging
+
+            const rect = chartElement.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            let nearest = null;
+            let minDistance = 20; // proximity threshold in pixels
+
+            const timeScale = chart.timeScale();
+            // Check all trades
+            for (const t of allTrades) {
+                const x = timeScale.timeToCoordinate(t.time);
+                const y = candlestickSeries.priceToCoordinate(t.entry_price);
+                
+                if (x === null || y === null) continue;
+
+                const dist = Math.sqrt(Math.pow(mouseX - x, 2) + Math.pow(mouseY - y, 2));
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    nearest = { trade: t, x, y };
+                }
+            }
+
+            if (nearest) {
+                const t = nearest.trade;
+                const isLong = t.position_type.toLowerCase() === 'long';
+                const color = isLong ? '#26a69a' : '#ef5350';
+                
+                tradeHighlight.style.display = 'block';
+                tradeHighlight.style.left = nearest.x + 'px';
+                tradeHighlight.style.top = nearest.y + 'px';
+                tradeHighlight.style.borderColor = color;
+                // Enlarge visual
+                tradeHighlight.style.width = '14px'; 
+                tradeHighlight.style.height = '14px';
+                tradeHighlight.style.boxShadow = `0 0 5px ${color}`;
+
+                tradeTooltip.style.display = 'block';
+                tradeTooltip.style.left = (nearest.x + 15) + 'px';
+                tradeTooltip.style.top = (nearest.y - 30) + 'px';
+                tradeTooltip.innerHTML = `
+                    <div style="font-weight:bold; margin-bottom:4px; border-bottom:1px solid #444; padding-bottom:2px;">#${t.position_id}</div>
+                    <div style="color:${color}; font-weight:bold;">${t.position_type.toUpperCase()}</div>
+                    <div>Entry: ${t.entry_price}</div>
+                    <div>Exit: ${t.exit_price || '-'}</div>
+                    <div>Lot: ${t.lot_size}</div>
+                `;
+            } else {
+                tradeHighlight.style.display = 'none';
+                tradeTooltip.style.display = 'none';
             }
         });
 

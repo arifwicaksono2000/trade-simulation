@@ -2,6 +2,7 @@ import pandas as pd
 from database import engine, SessionLocal, Base
 from models import ForexData
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 import os
 import time
 
@@ -27,15 +28,10 @@ def import_csv_to_db():
     
     session = SessionLocal()
     try:
-        # Check if data already exists to avoid duplicates (slower but safer) - 
-        # For this initial bulk load, assuming empty or overwrite is okay?
-        # Let's just truncate/drop first or assume empty?
-        # The prompt implies moving to DB, so likely fresh start.
-        # Let's check count first.
-        count = session.query(ForexData).count()
-        if count > 0:
-            print(f"Database already has {count} records. Skipping import to avoid duplicates.")
-            return
+        # Clear existing data
+        print("Truncating table forex_data...")
+        session.execute(text("TRUNCATE TABLE forex_data"))
+        session.commit()
 
         print(f"Importing {total_rows} records...")
         
