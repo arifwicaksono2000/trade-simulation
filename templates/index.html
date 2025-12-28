@@ -202,7 +202,21 @@
                    // We'll see.
                    
                    const point = { time: t.time, value: t.entry_price };
-                   if (t.position_type.toLowerCase() === 'long') {
+
+                   // Create a horizontal price line for this trade
+                   const isLong = t.position_type.toLowerCase() === 'long';
+                   const color = isLong ? '#26a69a' : '#ef5350';
+
+                   candlestickSeries.createPriceLine({
+                       price: t.entry_price,
+                       color: color,
+                       lineWidth: 1,
+                       lineStyle: LightweightCharts.LineStyle.Dashed,
+                       axisLabelVisible: true,
+                       title: `${t.position_type.toUpperCase()} #${t.position_id}`,
+                   });
+
+                   if (isLong) {
                        longs.push(point);
                    } else {
                        shorts.push(point);
@@ -360,6 +374,11 @@
             const priceDiff = endPoint.price - startPoint.price;
             const pricePct = (priceDiff / startPoint.price) * 100;
             
+            // Calculate Pips
+            // Heuristic using price value: JPY pairs > 50 -> pip size 0.01, others 0.0001
+            const pipSize = startPoint.price > 50 ? 0.01 : 0.0001;
+            const pips = priceDiff / pipSize;
+
             // Time diff is tricky with business days / raw timestamps.
             // Assuming we deal with unix timestamps mostly or string dates. 
             // For simple difference, we might need the index or just display raw.
@@ -377,6 +396,7 @@
 
             measureLabel.innerHTML = `
                 ${priceDiff.toFixed(5)} (${pricePct.toFixed(2)}%)<br>
+                ${pips.toFixed(1)} pips<br>
                 ${timeText}
             `;
             measureLabel.style.left = (left + width / 2) + 'px';
