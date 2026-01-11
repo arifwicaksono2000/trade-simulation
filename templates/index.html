@@ -100,10 +100,71 @@
             z-index: 51;
             white-space: nowrap;
         }
+
+        /* Segment Filter Styles */
+        .segment-btn {
+            position: absolute;
+            top: 10px;
+            left: 110px; /* Offset from Measure button */
+            z-index: 100;
+            padding: 8px 16px;
+            background-color: #4caf50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            opacity: 0.8;
+            transition: opacity 0.2s;
+        }
+        .segment-btn:hover {
+            opacity: 1;
+        }
+        .segment-list-container {
+            position: absolute;
+            top: 50px;
+            left: 110px;
+            background-color: #1e222d;
+            border: 1px solid #363c4e;
+            border-radius: 4px;
+            z-index: 101;
+            max-height: 300px;
+            overflow-y: auto;
+            display: none;
+            width: 300px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        .segment-item {
+            padding: 8px 12px;
+            border-bottom: 1px solid #2a2e39;
+            cursor: pointer;
+            font-size: 13px;
+            display: flex;
+            justify-content: space-between;
+        }
+        .segment-item:hover {
+            background-color: #2a2e39;
+        }
+        .segment-item:last-child {
+            border-bottom: none;
+        }
+        .segment-item.active {
+            background-color: #2962ff;
+            color: white;
+        }
+        .segment-meta {
+            font-size: 11px;
+            color: #787b86;
+        }
+        .segment-item.active .segment-meta {
+            color: #cfd8dc;
+        }
     </style>
 </head>
 <body>
     <button id="measureBtn" class="measure-btn">Measure</button>
+    <button id="segmentBtn" class="segment-btn">Filter Segment</button>
+    <div id="segmentList" class="segment-list-container"></div>
     <div id="measureBox" class="measure-box"></div>
     <div id="measureLabel" class="measure-label"></div>
     <div id="tradeTooltip" class="trade-tooltip"></div>
@@ -179,62 +240,17 @@
         let allTrades = [];
 
         // Fetch Data
+        const loadTrades = (segmentId = null) => {
+             return fetch(`/api/trades${segmentId ? '?segment_id=' + segmentId : ''}`).then(r => r.json());
+        };
+
         Promise.all([
              fetch('/api/data').then(r => r.json()),
-             fetch('/api/trades').then(r => r.json())
+             loadTrades()
         ]).then(([candleData, tradeData]) => {
                 candlestickSeries.setData(candleData);
                 
-                // Process trades
-                allTrades = tradeData;
-                const longs = [];
-                const shorts = [];
-                
-                // Sort trades by time just in case, though usually DB handles it.
-                // Lightweight charts strict about order.
-                allTrades.sort((a, b) => a.time - b.time);
-
-                allTrades.forEach(t => {
-                   // Ensure unique time? 
-                   // If same timestamp, we drop it? Or add epsilon.
-                   // Simple fix: if multiple items have same time, shift slightly if possible logic wise, 
-                   // but here just pushing. Lightweight Charts might error if exact duplicates on same series.
-                   // We'll see.
-                   
-                   const point = { time: t.time, value: t.entry_price };
-
-                   // Create a horizontal price line for this trade
-                   const isLong = t.position_type.toLowerCase() === 'long';
-                   const color = isLong ? '#26a69a' : '#ef5350';
-
-                   candlestickSeries.createPriceLine({
-                       price: t.entry_price,
-                       color: color,
-                       lineWidth: 1,
-                       lineStyle: LightweightCharts.LineStyle.Dashed,
-                       axisLabelVisible: true,
-                       title: `${t.position_type.toUpperCase()} #${t.position_id}`,
-                   });
-
-                   if (isLong) {
-                       longs.push(point);
-                   } else {
-                       shorts.push(point);
-                   }
-                });
-
-                // Deduping for series (simple approach: last wins)
-                // Helper to dedup by time
-                const dedup = (arr) => {
-                    const seen = new Set();
-                    return arr.filter(item => {
-                        const k = item.time;
-                        return seen.has(k) ? false : seen.add(k);
-                    });
-                };
-
-                longSeries.setData(dedup(longs));
-                shortSeries.setData(dedup(shorts));
+                renderTrades(tradeData);
 
                 loadingElement.style.display = 'none';
                 chart.timeScale().fitContent();
@@ -243,6 +259,71 @@
             console.error(err);
             loadingElement.innerText = "Error loading data.";
         });
+
+        function renderTrades(tradeData) {
+            // clear existing markers by setting empty array?
+            // LineSeries setData replaces data.
+            
+            allTrades = tradeData;
+            const longs = [];
+            const shorts = [];
+            
+            // Sort trades by time
+            allTrades.sort((a, b) => a.time - b.time);
+
+            // Clear previous price lines
+            // Unfortunately there is no easy "clearPriceLines" API in lightweight-charts v3/4 for a series 
+            // without keeping track of them.
+            // We might need to assume a reload or just clear series data, but price lines are separate.
+            // A simple hack: Re-create the candlestick series or just ignore clearing old price lines 
+            // if we accept they might persist? No, we must clear them.
+            // Best way: track the price line objects and remove them.
+            
+            clearPriceLines();
+
+            allTrades.forEach(t => {
+               const point = { time: t.time, value: t.entry_price };
+
+               const isLong = t.position_type.toLowerCase() === 'long';
+               const color = isLong ? '#26a69a' : '#ef5350';
+
+               const line = candlestickSeries.createPriceLine({
+                   price: t.entry_price,
+                   color: color,
+                   lineWidth: 1,
+                   lineStyle: LightweightCharts.LineStyle.Dashed,
+                   axisLabelVisible: true,
+                   title: `${t.position_type.toUpperCase()} #${t.position_id}`,
+               });
+               priceLines.push(line);
+
+               if (isLong) {
+                   longs.push(point);
+               } else {
+                   shorts.push(point);
+               }
+            });
+
+            // Dedup
+            const dedup = (arr) => {
+                const seen = new Set();
+                return arr.filter(item => {
+                    const k = item.time;
+                    return seen.has(k) ? false : seen.add(k);
+                });
+            };
+
+            longSeries.setData(dedup(longs));
+            shortSeries.setData(dedup(shorts));
+        }
+
+        let priceLines = [];
+        function clearPriceLines() {
+            priceLines.forEach(line => {
+                candlestickSeries.removePriceLine(line);
+            });
+            priceLines = [];
+        }
 
         // --- Measure Tool Logic ---
         const measureBtn = document.getElementById('measureBtn');
@@ -468,6 +549,78 @@
             } else {
                 tradeHighlight.style.display = 'none';
                 tradeTooltip.style.display = 'none';
+            }
+        });
+
+        // --- Segment Filter Logic ---
+        const segmentBtn = document.getElementById('segmentBtn');
+        const segmentList = document.getElementById('segmentList');
+        let segmentsLoaded = false;
+        let activeSegmentId = null;
+
+        segmentBtn.addEventListener('click', () => {
+            if (segmentList.style.display === 'block') {
+                segmentList.style.display = 'none';
+            } else {
+                if (!segmentsLoaded) {
+                    loadSegments();
+                }
+                segmentList.style.display = 'block';
+            }
+        });
+
+        function loadSegments() {
+            fetch('/api/segments')
+                .then(r => r.json())
+                .then(segments => {
+                    segmentsLoaded = true;
+                    segmentList.innerHTML = '';
+                    
+                    // Add "All Segments" option
+                    const allItem = document.createElement('div');
+                    allItem.className = 'segment-item' + (activeSegmentId === null ? ' active' : '');
+                    allItem.innerHTML = `<span>All Trades</span>`;
+                    allItem.onclick = () => selectSegment(null, allItem);
+                    segmentList.appendChild(allItem);
+
+                    segments.forEach(seg => {
+                        const item = document.createElement('div');
+                        item.className = 'segment-item' + (activeSegmentId === seg.id ? ' active' : '');
+                        item.innerHTML = `
+                            <div>
+                                <div>${seg.pair} - ${seg.status}</div>
+                                <div class="segment-meta">Bal: ${seg.total_balance} | Pos: ${seg.total_positions}</div>
+                            </div>
+                            <div class="segment-meta">${new Date(seg.opened_at).toLocaleDateString()}</div>
+                        `;
+                        item.onclick = () => selectSegment(seg.id, item);
+                        segmentList.appendChild(item);
+                    });
+                })
+                .catch(err => console.error("Error loading segments:", err));
+        }
+
+        function selectSegment(id, element) {
+            activeSegmentId = id;
+            
+            // UI Update
+            document.querySelectorAll('.segment-item').forEach(el => el.classList.remove('active'));
+            element.classList.add('active');
+            segmentBtn.innerText = id ? `Segment #${id}` : 'Filter Segment';
+            segmentList.style.display = 'none';
+
+            // Fetch trades
+            loadingElement.style.display = 'block';
+            loadTrades(id).then(trades => {
+                renderTrades(trades);
+                loadingElement.style.display = 'none';
+            });
+        }
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!segmentBtn.contains(e.target) && !segmentList.contains(e.target)) {
+                segmentList.style.display = 'none';
             }
         });
 

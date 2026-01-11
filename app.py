@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 import os
 from datetime import timezone
 from database import get_db
-from models import ForexData, TradeDetail
+from models import ForexData, TradeDetail, Segment
 
 app = FastAPI()
 
@@ -39,8 +39,12 @@ async def get_data(db: Session = Depends(get_db)):
     return chart_data
 
 @app.get("/api/trades")
-async def get_trades(db: Session = Depends(get_db)):
-    results = db.query(TradeDetail).all()
+async def get_trades(segment_id: int = None, db: Session = Depends(get_db)):
+    query = db.query(TradeDetail)
+    if segment_id:
+        query = query.filter(TradeDetail.segment_id == segment_id)
+        
+    results = query.all()
     trades = [
         {
             "id": row.id,
@@ -55,6 +59,23 @@ async def get_trades(db: Session = Depends(get_db)):
         for row in results
     ]
     return trades
+
+@app.get("/api/segments")
+async def get_segments(db: Session = Depends(get_db)):
+    results = db.query(Segment).order_by(Segment.opened_at.desc()).all()
+    segments = [
+        {
+            "id": row.id,
+            "uuid": row.uuid,
+            "pair": row.pair,
+            "status": row.status,
+            "total_positions": row.total_positions,
+            "total_balance": row.total_balance,
+            "opened_at": row.opened_at.isoformat() if row.opened_at else None
+        }
+        for row in results
+    ]
+    return segments
 
 if __name__ == "__main__":
     import uvicorn
