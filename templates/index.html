@@ -171,6 +171,7 @@
     <div id="tradeHighlight" class="trade-highlight"></div>
     <div id="loading" class="loading">Loading data...</div>
     <div id="chart"></div>
+    <canvas id="tradeOverlay" style="position: absolute; top: 0; left: 0; pointer-events: none; z-index: 5;"></canvas>
 
     <script>
         const chartElement = document.getElementById('chart');
@@ -203,6 +204,29 @@
         };
         const chart = LightweightCharts.createChart(chartElement, chartOptions);
 
+        // Vertical Trade Markers (Histogram)
+        const tradeMarkerSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
+            priceScaleId: 'overlay',
+            priceFormat: { type: 'custom', minMove: 1, formatter: () => '' },
+        });
+        
+        chart.priceScale('overlay').applyOptions({
+            scaleMargins: { top: 0, bottom: 0 },
+            visible: false,
+        });
+
+
+        // Exit Dots Series
+        const exitSeries = chart.addSeries(LightweightCharts.LineSeries, {
+            color: 'white',
+            lineWidth: 0,
+            pointMarkersVisible: true,
+            pointMarkersRadius: 3, 
+            pointMarkersCanvasArc: true,
+            lineVisible: false,
+            crosshairMarkerVisible: false,
+        });
+
         const candlestickSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
             upColor: '#26a69a', 
             downColor: '#ef5350', 
@@ -231,6 +255,8 @@
             lineVisible: false,
             crosshairMarkerVisible: false,
         });
+
+
 
         // Resize handler
         window.addEventListener('resize', () => {
@@ -264,9 +290,15 @@
             // clear existing markers by setting empty array?
             // LineSeries setData replaces data.
             
+            
             allTrades = tradeData;
             const longs = [];
             const shorts = [];
+            const markers = [];
+            const exits = [];
+            
+            // Store current segment trades for canvas drawing
+            window.currentSegmentTrades = [];
             
             // Sort trades by time
             allTrades.sort((a, b) => a.time - b.time);
@@ -279,28 +311,42 @@
             // if we accept they might persist? No, we must clear them.
             // Best way: track the price line objects and remove them.
             
-            clearPriceLines();
+            // Clear previous price lines (No longer needed, we use Histogram now which we overwrite)
+            
+            // Allow Exit Visualization only if we are in "Segment Mode" (subset of trades)
+            // or if explicitly requested. Code implies "this feature only exist when the user select a certain segment".
+            // We can detect this by checking if `loadTrades` was called with segmentId or checking URL.
+            // Easier: check internal state `activeSegmentId`.
+            
+            const showExits = activeSegmentId !== null;
 
             allTrades.forEach(t => {
                const point = { time: t.time, value: t.entry_price };
 
                const isLong = t.position_type.toLowerCase() === 'long';
                const color = isLong ? '#26a69a' : '#ef5350';
+               const markerColor = isLong ? 'rgba(38, 166, 154, 0.5)' : 'rgba(239, 83, 80, 0.5)';
 
-               const line = candlestickSeries.createPriceLine({
-                   price: t.entry_price,
-                   color: color,
-                   lineWidth: 1,
-                   lineStyle: LightweightCharts.LineStyle.Dashed,
-                   axisLabelVisible: true,
-                   title: `${t.position_type.toUpperCase()} #${t.position_id}`,
-               });
-               priceLines.push(line);
+               // Histogram data for vertical line
+               markers.push({ time: t.time, value: 1, color: markerColor });
 
                if (isLong) {
                    longs.push(point);
                } else {
                    shorts.push(point);
+               }
+               
+               if (showExits && t.exit_price !== null && t.close_time) {
+                   // Exit Dot
+                   exits.push({ time: t.close_time, value: t.exit_price }); 
+                   
+                   // Collect data for canvas drawing
+                   window.currentSegmentTrades.push({
+                       entryTime: t.time,
+                       entryPrice: t.entry_price,
+                       exitTime: t.close_time,
+                       exitPrice: t.exit_price
+                   });
                }
             });
 
@@ -313,17 +359,69 @@
                 });
             };
 
+            tradeMarkerSeries.setData(dedup(markers));
             longSeries.setData(dedup(longs));
             shortSeries.setData(dedup(shorts));
+            
+            // Sort exits because close times might be out of order relative to entry times
+            exits.sort((a, b) => a.time - b.time);
+            exitSeries.setData(dedup(exits));
+
+            // Trigger canvas redraw
+            requestAnimationFrame(drawConnectors);
         }
 
-        let priceLines = [];
-        function clearPriceLines() {
-            priceLines.forEach(line => {
-                candlestickSeries.removePriceLine(line);
-            });
-            priceLines = [];
+        // --- Canvas Overlay Logic ---
+        const canvas = document.getElementById('tradeOverlay');
+        const ctx = canvas.getContext('2d');
+
+        function syncCanvasSize() {
+            const rect = chartElement.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+            canvas.style.width = rect.width + 'px';
+            canvas.style.height = rect.height + 'px';
+            drawConnectors();
         }
+
+        function drawConnectors() {
+            if (!ctx || !window.currentSegmentTrades) return;
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const timeScale = chart.timeScale();
+            // We need to access a price scale. Since we use creating series, default is right.
+            // But we don't have direct access to 'priceToCoordinate' on the chart object uniformly 
+            // without a series instance. We can use `candlestickSeries`.
+            
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+
+            window.currentSegmentTrades.forEach(t => {
+                const x1 = timeScale.timeToCoordinate(t.entryTime);
+                const y1 = candlestickSeries.priceToCoordinate(t.entryPrice);
+                
+                const x2 = timeScale.timeToCoordinate(t.exitTime);
+                const y2 = candlestickSeries.priceToCoordinate(t.exitPrice);
+
+                if (x1 !== null && y1 !== null && x2 !== null && y2 !== null) {
+                    ctx.moveTo(x1, y1);
+                    ctx.lineTo(x2, y2);
+                }
+            });
+
+            ctx.stroke();
+        }
+
+        // Bind events for canvas updates
+        chart.timeScale().subscribeVisibleTimeRangeChange(drawConnectors);
+        // Also need to redraw on crosshair move? No, only on scroll/zoom.
+        // And resize.
+        window.addEventListener('resize', syncCanvasSize);
+        // Init size
+        syncCanvasSize();
 
         // --- Measure Tool Logic ---
         const measureBtn = document.getElementById('measureBtn');
@@ -576,6 +674,9 @@
                     segmentsLoaded = true;
                     segmentList.innerHTML = '';
                     
+                    // Sort segments by total_balance desc
+                    segments.sort((a, b) => b.total_balance - a.total_balance);
+
                     // Add "All Segments" option
                     const allItem = document.createElement('div');
                     allItem.className = 'segment-item' + (activeSegmentId === null ? ' active' : '');

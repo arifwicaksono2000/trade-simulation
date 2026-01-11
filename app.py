@@ -55,6 +55,8 @@ async def get_trades(segment_id: int = None, db: Session = Depends(get_db)):
             "lot_size": row.lot_size,
             "time": int(row.opened_at.replace(tzinfo=timezone.utc).timestamp()) if row.opened_at else None,
             "opened_at": row.opened_at.isoformat() if row.opened_at else None,
+            "closed_at": row.closed_at.isoformat() if row.closed_at else None,
+            "close_time": int(row.closed_at.replace(tzinfo=timezone.utc).timestamp()) if row.closed_at else None,
         }
         for row in results
     ]
